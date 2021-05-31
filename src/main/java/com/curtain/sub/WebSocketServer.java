@@ -25,36 +25,49 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 @Slf4j
 public class WebSocketServer {
-    /**concurrent包的线程安全Set，用来存放每个客户端对应的MyWebSocket对象。*/
-    private static ConcurrentHashMap<String, ConcurrentHashMap<String,WebSocketServer>> webSocketMap = new ConcurrentHashMap<>();
-    /**与某个客户端的连接会话，需要通过它来给客户端发送数据*/
+    /**
+     * concurrent包的线程安全Set，用来存放每个客户端对应的MyWebSocket对象。
+     */
+    private static ConcurrentHashMap<String, ConcurrentHashMap<String, WebSocketServer>> webSocketMap = new ConcurrentHashMap<>();
+    /**
+     * 存放psub的事件
+     **/
+    private static ConcurrentHashMap<String, ConcurrentHashMap<String, WebSocketServer>> pWebSocketMap = new ConcurrentHashMap<>();
+    /**
+     * 与某个客户端的连接会话，需要通过它来给客户端发送数据
+     */
     private Session session;
-    /**接收userName*/
-    private String sessionId="";
+    /**
+     * 接收userName
+     */
+    private String sessionId = "";
     private static EventPubSub eventPubSub;
     private static TaskExecuteService executeService;
     private static JedisPool jedisPool;
 
     @Autowired
-    public void setEventPubSub(EventPubSub eventPubSub){
-        WebSocketServer.eventPubSub = eventPubSub;
+    public void setEventPubSub(EventPubSub eventPubSub) {
+        this.eventPubSub = eventPubSub;
     }
+
     @Autowired
-    public void setTaskExecuteService(TaskExecuteService taskExecuteService){
-        WebSocketServer.executeService = taskExecuteService;
+    public void setTaskExecuteService(TaskExecuteService taskExecuteService) {
+        this.executeService = taskExecuteService;
     }
+
     @Autowired
-    public void setJedisPool(JedisPool jedisPool){
-        WebSocketServer.jedisPool = jedisPool;
+    public void setJedisPool(JedisPool jedisPool) {
+        this.jedisPool = jedisPool;
     }
 
 
     /**
-     * 连接建立成功调用的方法*/
+     * 连接建立成功调用的方法
+     */
     @OnOpen
     public void onOpen(Session session) {
         this.session = session;
-        this.sessionId=session.getId();
+        this.sessionId = session.getId();
         //构造推送数据
         Map pubHeader = new HashMap();
         pubHeader.put("name", "connect_status");
@@ -69,40 +82,68 @@ public class WebSocketServer {
         try {
             sendMessage(JSON.toJSONString(pubMap));
         } catch (IOException e) {
-            log.error("sessionId:"+this.sessionId+",网络异常!!!!!!");
+            log.error("sessionId:" + this.sessionId + ",网络异常!!!!!!");
         }
     }
 
     @OnMessage
-    public void onMessage(String message){
+    public void onMessage(String message) {
         Map msgMap = (Map) JSON.parse(message);
         String cmd = (String) msgMap.get("cmd");
         //订阅消息
-        if ("subscribe".equals(cmd)){
+        if ("subscribe".equals(cmd)) {
             List<String> topics = (List<String>) msgMap.get("topic");
             //本地记录订阅信息
-            for (int i = 0; i < topics.size(); i++){
+            for (int i = 0; i < topics.size(); i++) {
                 String topic = topics.get(i);
-                if (webSocketMap.containsKey(topic)){//有人订阅过了
+                if (webSocketMap.containsKey(topic)) {//有人订阅过了
                     webSocketMap.get(topic).put(this.sessionId, this);
-                }else{//之前还没人订阅过，所以需要订阅redis频道
+                } else {//之前还没人订阅过，所以需要订阅redis频道
                     ConcurrentHashMap<String, WebSocketServer> map = new ConcurrentHashMap<>();
-                    map.put(this.sessionId,this);
+                    map.put(this.sessionId, this);
                     webSocketMap.put(topic, map);
-                    executeService.runAsync(()->eventPubSub.subscribe(topic));
+                    executeService.runAsync(() -> eventPubSub.subscribe(topic));
                 }
                 log.info("sessionId：" + this.sessionId + "，订阅了：" + topic);
             }
         }
+        //psubscribe
+        if ("psubscribe".equals(cmd)) {
+            List<String> topics = (List<String>) msgMap.get("topic");
+            //本地记录订阅信息
+            for (int i = 0; i < topics.size(); i++) {
+                String topic = topics.get(i);
+                if (pWebSocketMap.containsKey(topic)) {//有人订阅过了
+                    pWebSocketMap.get(topic).put(this.sessionId, this);
+                } else {//之前还没人订阅过，所以需要订阅redis频道
+                    ConcurrentHashMap<String, WebSocketServer> map = new ConcurrentHashMap<>();
+                    map.put(this.sessionId, this);
+                    pWebSocketMap.put(topic, map);
+                    executeService.runAsync(() -> eventPubSub.pSubscribe(topic));
+                }
+                log.info("sessionId：" + this.sessionId + "，模糊订阅了：" + topic);
+            }
+        }
         //取消订阅
-        if ("unsubscribe".equals(cmd)){
+        if ("unsubscribe".equals(cmd)) {
             List<String> topics = (List<String>) msgMap.get("topic");
             //删除本地对应的订阅信息
-            for (String topic : topics){
-                if (webSocketMap.containsKey(topic)){
+            for (String topic : topics) {
+                if (webSocketMap.containsKey(topic)) {
                     ConcurrentHashMap<String, WebSocketServer> map = webSocketMap.get(topic);
                     map.remove(this.sessionId);
-                    if (map.size() == 0){//如果这个频道没有用户订阅了，则取消订阅该redis频道
+                    if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
+                        webSocketMap.remove(topic);
+                        Jedis jedis = jedisPool.getResource();
+                        jedis.publish(topic, "unsubscribe");
+                        jedis.close();
+                    }
+                }
+                if (pWebSocketMap.containsKey(topic)){
+                    ConcurrentHashMap<String, WebSocketServer> map = pWebSocketMap.get(topic);
+                    map.remove(this.sessionId);
+                    if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
+                        pWebSocketMap.remove(topic);
                         Jedis jedis = jedisPool.getResource();
                         jedis.publish(topic, "unsubscribe");
                         jedis.close();
@@ -118,30 +159,43 @@ public class WebSocketServer {
      */
     @OnClose
     public void onClose() {
+        //删除订阅
         Iterator iterator = webSocketMap.keySet().iterator();
-        while (iterator.hasNext()){
+        while (iterator.hasNext()) {
             String topic = (String) iterator.next();
             ConcurrentHashMap<String, WebSocketServer> map = webSocketMap.get(topic);
             map.remove(this.sessionId);
-            if (map.size() == 0 ){//如果这个频道没有用户订阅了，则取消订阅该redis频道
+            if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
+                webSocketMap.remove(topic);
                 Jedis jedis = jedisPool.getResource();
                 jedis.publish(topic, "unsubscribe");
                 jedis.close();
             }
         }
-        log.info("sessionId："+ this.sessionId + "，断开连接：");
+        //删除模糊订阅
+        Iterator iteratorP = pWebSocketMap.keySet().iterator();
+        while (iteratorP.hasNext()){
+            String topic = (String) iterator.next();
+            ConcurrentHashMap<String, WebSocketServer> map = pWebSocketMap.get(topic);
+            map.remove(this.sessionId);
+            if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
+                pWebSocketMap.remove(topic);
+                Jedis jedis = jedisPool.getResource();
+                jedis.publish(topic, "unsubscribe");
+                jedis.close();
+            }
+        }
+        log.info("sessionId：" + this.sessionId + "，断开连接：");
     }
 
 
-
     /**
-     *
      * @param session
      * @param error
      */
     @OnError
     public void onError(Session session, Throwable error) {
-        log.error("用户错误,sessionId:"+ session.getId() + ",原因:"+error.getMessage());
+        log.error("用户错误,sessionId:" + session.getId() + ",原因:" + error.getMessage());
         error.printStackTrace();
     }
 
@@ -154,7 +208,12 @@ public class WebSocketServer {
 
     public static void publish(String msg, String topic) throws IOException {
         ConcurrentHashMap<String, WebSocketServer> map = webSocketMap.get(topic);
-        if (map != null && map.values() != null){
+        if (map != null && map.values() != null) {
+            for (WebSocketServer webSocketServer : map.values())
+                webSocketServer.sendMessage(msg);
+        }
+        map = pWebSocketMap.get(topic);
+        if (map != null && map.values() != null) {
             for (WebSocketServer webSocketServer : map.values())
                 webSocketServer.sendMessage(msg);
         }

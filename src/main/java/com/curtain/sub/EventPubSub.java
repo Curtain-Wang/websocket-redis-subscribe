@@ -39,14 +39,45 @@ public class EventPubSub extends JedisPubSub {
         }
     }
 
-    public void unSubscribe(String channel){
-        if (this.getSubscribedChannels() > 0)
-            this.unsubscribe(channel);
+    //模糊订阅
+    public void pSubscribe(String... channels) {
+        Jedis jedis = jedisPool.getResource();
+        try {
+            jedis.psubscribe(this, channels);
+        } catch (ArithmeticException e) {//取消订阅故意造成的异常
+            if (jedis != null)
+                jedis.close();
+        } catch (Exception e) {
+            log.error(e.getMessage());
+            if (jedis != null)
+                jedis.close();
+            //遇到异常后关闭连接重新订阅
+            psubscribe(channels);
+        }
     }
 
     @Override
     public void onSubscribe(String channel, int subscribedChannels) {
         log.info("subscribe redis channel：" + channel);
+    }
+
+    @Override
+    public void onPSubscribe(String pattern, int subscribedChannels) {
+        log.info("psubscribe redis channel：" + pattern);
+    }
+
+    @Override
+    public void onPMessage(String pattern, String channel, String message) {
+        log.info("receive from redis channal: " + channel + ",pattern: " + pattern + ",message：" + message);
+        if ("unsubscribe".equals(message)) {//取消订阅
+            int a = 0 / 0; //故意造成一个特殊的异常，关闭订阅改频道的jedis连接
+            return;
+        }
+        try {
+            WebSocketServer.publish(message, pattern);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     @Override
@@ -62,8 +93,14 @@ public class EventPubSub extends JedisPubSub {
             e.printStackTrace();
         }
     }
+
     @Override
     public void onUnsubscribe(String channel, int subscribedChannels) {
         System.out.println("unsubscribe redis channel：" + channel);
+    }
+
+    @Override
+    public void onPUnsubscribe(String pattern, int subscribedChannels) {
+        log.info("punsubscribe redis channel：" + pattern);
     }
 }
