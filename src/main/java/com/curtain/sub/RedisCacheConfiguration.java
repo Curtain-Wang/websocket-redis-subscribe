@@ -1,5 +1,6 @@
 package com.curtain.sub;
 
+
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CachingConfigurerSupport;
@@ -8,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
+
 
 /**
  * @Author Curtain
@@ -31,6 +33,9 @@ public class RedisCacheConfiguration extends CachingConfigurerSupport {
     @Value("${spring.redis.jedis.pool.max-idle}")
     private int maxIdle;
 
+    @Value("${spring.redis.jedis.pool.max-total}")
+    private int maxTotal;
+
     @Value("${spring.redis.jedis.pool.max-wait}")
     private long maxWaitMillis;
 
@@ -39,6 +44,7 @@ public class RedisCacheConfiguration extends CachingConfigurerSupport {
         JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
         jedisPoolConfig.setMaxIdle(maxIdle);
         jedisPoolConfig.setMaxWaitMillis(maxWaitMillis);
+        jedisPoolConfig.setMaxTotal(maxTotal);
         JedisPool jedisPool = new JedisPool(jedisPoolConfig, host, port, timeout);
         if (jedisPool != null)
             log.info("JedisPool注入成功！！");

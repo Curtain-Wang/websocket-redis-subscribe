@@ -13,3 +13,9 @@ spring:
         max-idle: 50
         max-wait: 500
         min-idle: 1
+        max-total: 500
+
+
+web-socket:
+  #心跳频率
+  period: 120
