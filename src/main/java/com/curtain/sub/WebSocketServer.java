@@ -1,7 +1,7 @@
 package com.curtain.sub;
 
-
 import com.alibaba.fastjson.JSON;
+import com.curtain.schedule.Cancelable;
 import com.curtain.schedule.TaskExecuteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,6 +12,8 @@ import redis.clients.jedis.JedisPool;
 import javax.websocket.*;
 import javax.websocket.server.ServerEndpoint;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -37,29 +39,33 @@ public class WebSocketServer {
      * 与某个客户端的连接会话，需要通过它来给客户端发送数据
      */
     private Session session;
-    /**
-     * 接收userName
-     */
     private String sessionId = "";
-    private static EventPubSub eventPubSub;
+    //要注入的对象
+    private static RedisPubSub redisPubSub;
     private static TaskExecuteService executeService;
     private static JedisPool jedisPool;
+    private static WebsocketProperties properties;
+
+    private Cancelable cancelable;
+    private static Jedis jedis;
 
     @Autowired
-    public void setEventPubSub(EventPubSub eventPubSub) {
-        this.eventPubSub = eventPubSub;
+    public void setRedisPubSub(RedisPubSub redisPubSub) {
+        WebSocketServer.redisPubSub = redisPubSub;
     }
-
     @Autowired
     public void setTaskExecuteService(TaskExecuteService taskExecuteService) {
-        this.executeService = taskExecuteService;
+        WebSocketServer.executeService = taskExecuteService;
     }
-
     @Autowired
     public void setJedisPool(JedisPool jedisPool) {
-        this.jedisPool = jedisPool;
+        WebSocketServer.jedisPool = jedisPool;
+        WebSocketServer.jedis = WebSocketServer.jedisPool.getResource();
     }
-
+    @Autowired
+    public void setWebsocketProperties(WebsocketProperties properties) {
+        WebSocketServer.properties = properties;
+    }
 
     /**
      * 连接建立成功调用的方法
@@ -72,7 +78,7 @@ public class WebSocketServer {
         Map pubHeader = new HashMap();
         pubHeader.put("name", "connect_status");
         pubHeader.put("type", "create");
-        pubHeader.put("from", "curtain");
+        pubHeader.put("from", "escort-monitor");
         pubHeader.put("time", new Date().getTime() / 1000);
         Map pubPayload = new HashMap();
         pubPayload.put("status", "success");
@@ -84,6 +90,22 @@ public class WebSocketServer {
         } catch (IOException e) {
             log.error("sessionId:" + this.sessionId + ",网络异常!!!!!!");
         }
+
+        cancelable = executeService.runPeriodly(() ->{
+            try {
+                if (cancelable != null && !session.isOpen()){
+                    log.info("断开连接，停止发送ping");
+                    cancelable.cancel();
+                }else {
+                    String data = "ping";
+                    ByteBuffer payload = ByteBuffer.wrap(data.getBytes());
+                    session.getBasicRemote().sendPing(payload);
+                }
+            }catch (IOException e){
+                e.printStackTrace();
+            }
+        },properties.getPeriod());
+
     }
 
     @OnMessage
@@ -102,7 +124,7 @@ public class WebSocketServer {
                     ConcurrentHashMap<String, WebSocketServer> map = new ConcurrentHashMap<>();
                     map.put(this.sessionId, this);
                     webSocketMap.put(topic, map);
-                    executeService.runAsync(() -> eventPubSub.subscribe(topic));
+                    executeService.runAsync(() -> redisPubSub.subscribe(topic));
                 }
                 log.info("sessionId：" + this.sessionId + "，订阅了：" + topic);
             }
@@ -119,7 +141,7 @@ public class WebSocketServer {
                     ConcurrentHashMap<String, WebSocketServer> map = new ConcurrentHashMap<>();
                     map.put(this.sessionId, this);
                     pWebSocketMap.put(topic, map);
-                    executeService.runAsync(() -> eventPubSub.pSubscribe(topic));
+                    executeService.runAsync(() -> redisPubSub.psubscribe(topic));
                 }
                 log.info("sessionId：" + this.sessionId + "，模糊订阅了：" + topic);
             }
@@ -134,9 +156,7 @@ public class WebSocketServer {
                     map.remove(this.sessionId);
                     if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                         webSocketMap.remove(topic);
-                        Jedis jedis = jedisPool.getResource();
                         jedis.publish(topic, "unsubscribe");
-                        jedis.close();
                     }
                 }
                 if (pWebSocketMap.containsKey(topic)){
@@ -144,9 +164,7 @@ public class WebSocketServer {
                     map.remove(this.sessionId);
                     if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                         pWebSocketMap.remove(topic);
-                        Jedis jedis = jedisPool.getResource();
                         jedis.publish(topic, "unsubscribe");
-                        jedis.close();
                     }
                 }
                 log.info("sessionId：" + this.sessionId + "，取消订阅了：" + topic);
@@ -154,6 +172,14 @@ public class WebSocketServer {
         }
     }
 
+    @OnMessage
+    public void onPong(PongMessage pongMessage) {
+        try {
+            log.debug(new String(pongMessage.getApplicationData().array(), "utf-8") + "接收到pong");
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+    }
     /**
      * 连接关闭调用的方法
      */
@@ -167,22 +193,18 @@ public class WebSocketServer {
             map.remove(this.sessionId);
             if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                 webSocketMap.remove(topic);
-                Jedis jedis = jedisPool.getResource();
                 jedis.publish(topic, "unsubscribe");
-                jedis.close();
             }
         }
         //删除模糊订阅
         Iterator iteratorP = pWebSocketMap.keySet().iterator();
         while (iteratorP.hasNext()){
-            String topic = (String) iterator.next();
+            String topic = (String) iteratorP.next();
             ConcurrentHashMap<String, WebSocketServer> map = pWebSocketMap.get(topic);
             map.remove(this.sessionId);
             if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                 pWebSocketMap.remove(topic);
-                Jedis jedis = jedisPool.getResource();
                 jedis.publish(topic, "unsubscribe");
-                jedis.close();
             }
         }
         log.info("sessionId：" + this.sessionId + "，断开连接：");
@@ -197,13 +219,39 @@ public class WebSocketServer {
     public void onError(Session session, Throwable error) {
         log.error("用户错误,sessionId:" + session.getId() + ",原因:" + error.getMessage());
         error.printStackTrace();
+        log.info("关闭错误用户对应的连接");
+        //删除订阅
+        Iterator iterator = webSocketMap.keySet().iterator();
+        while (iterator.hasNext()) {
+            String topic = (String) iterator.next();
+            ConcurrentHashMap<String, WebSocketServer> map = webSocketMap.get(topic);
+            map.remove(this.sessionId);
+            if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
+                webSocketMap.remove(topic);
+                jedis.publish(topic, "unsubscribe");
+            }
+        }
+        //删除模糊订阅
+        Iterator iteratorP = pWebSocketMap.keySet().iterator();
+        while (iteratorP.hasNext()){
+            String topic = (String) iteratorP.next();
+            ConcurrentHashMap<String, WebSocketServer> map = pWebSocketMap.get(topic);
+            map.remove(this.sessionId);
+            if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
+                pWebSocketMap.remove(topic);
+                jedis.publish(topic, "unsubscribe");
+            }
+        }
+        log.info("完成错误用户对应的连接关闭");
     }
 
     /**
      * 实现服务器主动推送
      */
     public void sendMessage(String message) throws IOException {
-        this.session.getBasicRemote().sendText(message);
+        synchronized (session){
+            this.session.getBasicRemote().sendText(message);
+        }
     }
 
     public static void publish(String msg, String topic) throws IOException {
