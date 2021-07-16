@@ -3,12 +3,10 @@ package com.curtain.core;
 import com.curtain.config.GetBeanUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPubSub;
 
-import java.io.IOException;
 import java.util.Arrays;
 
 /**
@@ -79,32 +77,15 @@ public class RedisPubSub extends JedisPubSub {
     @Override
     public void onPMessage(String pattern, String channel, String message) {
         log.info("receive from redis channal: " + channel + ",pattern: " + pattern + ",message：" + message + ", 线程id：" + Thread.currentThread().getId());
-        if ("unsubscribe".equals(message) && channel.equals(pattern)) {//取消订阅
-            punsubscribe(pattern);
-            return;
-        }
-        try {
-            WebSocketServer.publish(message, pattern);
-            WebSocketServer.publish(message, channel);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        WebSocketServer.publish(message, pattern);
+        WebSocketServer.publish(message, channel);
 
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void onMessage(String channel, String message) {
         log.info("receive from redis channal: " + channel + ",message：" + message + ", 线程id：" + Thread.currentThread().getId());
-        if ("unsubscribe".equals(message)) {//取消订阅
-            unsubscribe(channel);
-            return;
-        }
-        try {
-            WebSocketServer.publish(message, channel);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        WebSocketServer.publish(message, channel);
     }
 
     @Override

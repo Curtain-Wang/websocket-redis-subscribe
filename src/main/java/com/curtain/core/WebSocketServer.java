@@ -7,9 +7,6 @@ import com.curtain.service.impl.TaskExecuteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPool;
-
 import javax.websocket.*;
 import javax.websocket.server.ServerEndpoint;
 import java.io.IOException;
@@ -37,27 +34,25 @@ public class WebSocketServer {
      **/
     private static volatile ConcurrentHashMap<String, ConcurrentHashMap<String, WebSocketServer>> pWebSocketMap = new ConcurrentHashMap<>();
     /**
+     * 存放topic(pattern)-对应的RedisPubsub
+     */
+    private static volatile ConcurrentHashMap<String, RedisPubSub> redisPubSubMap = new ConcurrentHashMap<>();
+    /**
      * 与某个客户端的连接会话，需要通过它来给客户端发送数据
      */
     private Session session;
     private String sessionId = "";
     //要注入的对象
     private static TaskExecuteService executeService;
-    private static JedisPool jedisPool;
     private static WebsocketProperties properties;
 
     private Cancelable cancelable;
-    private static Jedis jedis;
 
     @Autowired
     public void setTaskExecuteService(TaskExecuteService taskExecuteService) {
         WebSocketServer.executeService = taskExecuteService;
     }
-    @Autowired
-    public void setJedisPool(JedisPool jedisPool) {
-        WebSocketServer.jedisPool = jedisPool;
-        WebSocketServer.jedis = WebSocketServer.jedisPool.getResource();
-    }
+
     @Autowired
     public void setWebsocketProperties(WebsocketProperties properties) {
         WebSocketServer.properties = properties;
@@ -81,12 +76,7 @@ public class WebSocketServer {
         Map pubMap = new HashMap();
         pubMap.put("header", pubHeader);
         pubMap.put("payload", pubPayload);
-        try {
-            sendMessage(JSON.toJSONString(pubMap));
-        } catch (IOException e) {
-            log.error("sessionId:" + this.sessionId + ",网络异常!!!!!!");
-        }
-
+        sendMessage(JSON.toJSONString(pubMap));
         cancelable = executeService.runPeriodly(() -> {
             try {
                 if (cancelable != null && !session.isOpen()) {
@@ -119,13 +109,14 @@ public class WebSocketServer {
                     log.info("sessionId：" + this.sessionId + "，开始订阅：" + topic);
                     if (webSocketMap.containsKey(topic)) {//有人订阅过了
                         webSocketMap.get(topic).put(this.sessionId, this);
-
                     } else {//之前还没人订阅过，所以需要订阅redis频道
                         ConcurrentHashMap<String, WebSocketServer> map = new ConcurrentHashMap<>();
                         map.put(this.sessionId, this);
                         webSocketMap.put(topic, map);
-                        new Thread(()->{
+                        new Thread(() -> {
                             RedisPubSub redisPubSub = new RedisPubSub();
+                            //存入map
+                            redisPubSubMap.put(topic, redisPubSub);
                             redisPubSub.subscribe(topic);
                         }).start();
                     }
@@ -148,8 +139,10 @@ public class WebSocketServer {
                         ConcurrentHashMap<String, WebSocketServer> map = new ConcurrentHashMap<>();
                         map.put(this.sessionId, this);
                         pWebSocketMap.put(topic, map);
-                        new Thread(()->{
+                        new Thread(() -> {
                             RedisPubSub redisPubSub = new RedisPubSub();
+                            //存入map
+                            redisPubSubMap.put(topic, redisPubSub);
                             redisPubSub.psubscribe(topic);
                         }).start();
                     }
@@ -170,7 +163,7 @@ public class WebSocketServer {
                         map.remove(this.sessionId);
                         if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                             webSocketMap.remove(topic);
-                            jedis.publish(topic, "unsubscribe");
+                            redisPubSubMap.get(topic).unsubscribe(topic);
                         }
                     }
                     if (pWebSocketMap.containsKey(topic)) {
@@ -178,7 +171,7 @@ public class WebSocketServer {
                         map.remove(this.sessionId);
                         if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                             pWebSocketMap.remove(topic);
-                            jedis.publish(topic, "unsubscribe");
+                            redisPubSubMap.get(topic).punsubscribe(topic);
                         }
                     }
                     log.info("sessionId：" + this.sessionId + "，完成删除订阅：" + topic);
@@ -213,7 +206,7 @@ public class WebSocketServer {
                 map.remove(this.sessionId);
                 if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                     webSocketMap.remove(topic);
-                    jedis.publish(topic, "unsubscribe");
+                    redisPubSubMap.get(topic).unsubscribe(topic);
                 }
             }
             //删除模糊订阅
@@ -224,7 +217,7 @@ public class WebSocketServer {
                 map.remove(this.sessionId);
                 if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                     pWebSocketMap.remove(topic);
-                    jedis.publish(topic, "unsubscribe");
+                    redisPubSubMap.get(topic).punsubscribe(topic);
                 }
             }
             log.info("sessionId：" + this.sessionId + "，断开连接：");
@@ -254,7 +247,7 @@ public class WebSocketServer {
                 map.remove(this.sessionId);
                 if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                     webSocketMap.remove(topic);
-                    jedis.publish(topic, "unsubscribe");
+                    redisPubSubMap.get(topic).unsubscribe(topic);
                 }
             }
             //删除模糊订阅
@@ -265,7 +258,7 @@ public class WebSocketServer {
                 map.remove(this.sessionId);
                 if (map.size() == 0) {//如果这个频道没有用户订阅了，则取消订阅该redis频道
                     pWebSocketMap.remove(topic);
-                    jedis.publish(topic, "unsubscribe");
+                    redisPubSubMap.get(topic).punsubscribe(topic);
                 }
             }
             log.info("完成错误用户对应的连接关闭");
@@ -278,13 +271,17 @@ public class WebSocketServer {
     /**
      * 实现服务器主动推送
      */
-    public void sendMessage(String message) throws IOException {
+    public void sendMessage(String message) {
         synchronized (session) {
-            this.session.getBasicRemote().sendText(message);
+            try {
+                this.session.getBasicRemote().sendText(message);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
-    public static void publish(String msg, String topic) throws IOException {
+    public static void publish(String msg, String topic) {
         ConcurrentHashMap<String, WebSocketServer> map = webSocketMap.get(topic);
         if (map != null && map.values() != null) {
             for (WebSocketServer webSocketServer : map.values())
