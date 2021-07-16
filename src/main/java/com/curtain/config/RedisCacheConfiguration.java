@@ -1,4 +1,4 @@
-package com.curtain.sub;
+package com.curtain.config;
 
 
 import lombok.extern.slf4j.Slf4j;

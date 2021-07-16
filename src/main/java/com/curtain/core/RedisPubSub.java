@@ -1,7 +1,7 @@
-package com.curtain.sub;
+package com.curtain.core;
 
+import com.curtain.config.GetBeanUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import redis.clients.jedis.Jedis;
@@ -19,18 +19,13 @@ import java.util.Arrays;
 @Component
 @Slf4j
 public class RedisPubSub extends JedisPubSub {
-
-    @Autowired
-    private JedisPool jedisPool;
+    private JedisPool jedisPool = GetBeanUtil.getBean(JedisPool.class);
 
     //订阅
     public void subscribe(String... channels) {
         Jedis jedis = jedisPool.getResource();
         try {
             jedis.subscribe(this, channels);
-        } catch (ArithmeticException e) {//取消订阅故意造成的异常
-            if (jedis != null)
-                jedis.close();
         } catch (Exception e) {
             log.error(e.getMessage());
             if (jedis != null)
@@ -73,19 +68,19 @@ public class RedisPubSub extends JedisPubSub {
 
     @Override
     public void onSubscribe(String channel, int subscribedChannels) {
-        log.info("subscribe redis channel：" + channel);
+        log.info("subscribe redis channel：" + channel + ", 线程id：" + Thread.currentThread().getId());
     }
 
     @Override
     public void onPSubscribe(String pattern, int subscribedChannels) {
-        log.info("psubscribe redis channel：" + pattern);
+        log.info("psubscribe redis channel：" + pattern + ", 线程id：" + Thread.currentThread().getId());
     }
 
     @Override
     public void onPMessage(String pattern, String channel, String message) {
-        log.info("receive from redis channal: " + channel + ",pattern: " + pattern + ",message：" + message);
+        log.info("receive from redis channal: " + channel + ",pattern: " + pattern + ",message：" + message + ", 线程id：" + Thread.currentThread().getId());
         if ("unsubscribe".equals(message) && channel.equals(pattern)) {//取消订阅
-            int a = 0 / 0; //故意造成一个特殊的异常，关闭订阅改频道的jedis连接
+            punsubscribe(pattern);
             return;
         }
         try {
@@ -100,9 +95,9 @@ public class RedisPubSub extends JedisPubSub {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void onMessage(String channel, String message) {
-        log.info("receive from redis channal: " + channel + ",message：" + message);
+        log.info("receive from redis channal: " + channel + ",message：" + message + ", 线程id：" + Thread.currentThread().getId());
         if ("unsubscribe".equals(message)) {//取消订阅
-            int a = 0 / 0; //故意造成一个特殊的异常，关闭订阅改频道的jedis连接
+            unsubscribe(channel);
             return;
         }
         try {

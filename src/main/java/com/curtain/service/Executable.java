@@ -1,4 +1,5 @@
-package com.curtain.schedule;
+package com.curtain.service;
+
 
 
 import java.util.Date;

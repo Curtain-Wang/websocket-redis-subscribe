@@ -1,6 +1,7 @@
-package com.curtain.schedule;
+package com.curtain.service.impl;
 
-
+import com.curtain.service.Cancelable;
+import com.curtain.service.Executable;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;

@@ -1,4 +1,4 @@
-package com.curtain.sub;
+package com.curtain.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

@@ -1,4 +1,4 @@
-package com.curtain.schedule;
+package com.curtain.service;
 
 /**
  * @ClassName: Cancelable

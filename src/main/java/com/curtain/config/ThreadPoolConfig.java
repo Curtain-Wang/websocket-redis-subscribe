@@ -1,4 +1,4 @@
-package com.curtain.schedule;
+package com.curtain.config;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
