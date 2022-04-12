@@ -45,25 +45,23 @@ public class RedisPubSub extends JedisPubSub {
     //模糊订阅
     @Override
     public void psubscribe(String... channels) {
-        Jedis jedis = jedisPool.getResource();
-        try {
-            jedis.psubscribe(this, channels);
-        } catch (ArithmeticException e) {//取消订阅故意造成的异常
-            if (jedis != null)
-                jedis.close();
-        } catch (Exception e) {
-            log.error(e.getMessage());
-            if (jedis != null)
-                jedis.close();
-            //遇到异常后关闭连接重新订阅
-            log.info("监听遇到异常，四秒后重新订阅频道：");
-            Arrays.asList(channels).forEach(s -> {log.info(s);});
+        while (true){
+            Jedis jedis = jedisPool.getResource();
             try {
-                Thread.sleep(4000);
-            } catch (InterruptedException interruptedException) {
-                interruptedException.printStackTrace();
+                jedis.psubscribe(this, channels);
+            } catch (Exception e) {
+                log.error(e.getMessage());
+                if (jedis != null)
+                    jedis.close();
+                //遇到异常后关闭连接重新订阅
+                log.info("监听遇到异常，四秒后重新订阅频道：");
+                Arrays.asList(channels).forEach(s -> {log.info(s);});
+                try {
+                    Thread.sleep(4000);
+                } catch (InterruptedException interruptedException) {
+                    interruptedException.printStackTrace();
+                }
             }
-            psubscribe(channels);
         }
     }
 
