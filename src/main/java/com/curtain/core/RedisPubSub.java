@@ -22,10 +22,12 @@ public class RedisPubSub extends JedisPubSub {
     //订阅
     @Override
     public void subscribe(String... channels) {
-        while (true){
+        boolean done = true;
+        while (done){
             Jedis jedis = jedisPool.getResource();
             try {
                 jedis.subscribe(this, channels);
+                done = false;
             } catch (Exception e) {
                 log.error(e.getMessage());
                 if (jedis != null)
@@ -45,10 +47,12 @@ public class RedisPubSub extends JedisPubSub {
     //模糊订阅
     @Override
     public void psubscribe(String... channels) {
-        while (true){
+        boolean done = true;
+        while (done){
             Jedis jedis = jedisPool.getResource();
             try {
                 jedis.psubscribe(this, channels);
+                done = false;
             } catch (Exception e) {
                 log.error(e.getMessage());
                 if (jedis != null)
